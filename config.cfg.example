@@ -1,0 +1,21 @@
+[Bot]
+# Comma-separated list of Telegram User IDs allowed to use the bot
+admin_ids = 123456789
+# Your bot token from @BotFather
+token = YOUR_BOT_TOKEN_HERE
+# Maximum size in GB to auto-download without confirmation (optional logic)
+max_auto_download_size_gb = 50
+
+[Downloader]
+# Directory where files will be saved temporarily
+download_dir = ./downloads
+# Number of concurrent downloads/uploads allowed
+max_concurrent_downloads = 2
+
+[Drive]
+# Google Drive Folder ID where files will be uploaded
+target_folder_id = YOUR_DRIVE_FOLDER_ID
+# Path to Google OAuth2 credentials JSON
+credentials_file = credentials.json
+# Path to save/load OAuth2 token state
+token_file = token.json

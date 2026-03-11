@@ -1,0 +1,9 @@
+python-telegram-bot>=20.0
+fastapi>=0.95.0
+uvicorn>=0.22.0
+google-api-python-client>=2.90.0
+google-auth-httplib2>=0.1.0
+google-auth-oauthlib>=1.0.0
+pytest>=7.0.0
+libtorrent>=2.0.0; sys_platform == 'linux' or sys_platform == 'darwin'
+# libtorrent might need to be installed via system packages on some distros (e.g. apt-get install python3-libtorrent)
