@@ -51,7 +51,23 @@ def load_config(config_path: str = "config.cfg") -> ConfigParser:
         ("Downloader", "max_concurrent_downloads"): "DOWNLOADER_MAX_CONCURRENT_DOWNLOADS",
         ("Drive", "target_folder_id"): "DRIVE_TARGET_FOLDER_ID",
         ("Drive", "credentials_file"): "DRIVE_CREDENTIALS_FILE",
-        ("Drive", "token_file"): "DRIVE_TOKEN_FILE"
+        ("Drive", "token_file"): "DRIVE_TOKEN_FILE",
+        ("Telegram", "bot_token"): "TELEGRAM_BOT_TOKEN",
+        ("Telegram", "owner_id"): "TELEGRAM_OWNER_ID",
+        ("MTProto", "api_id"): "MTPROTO_API_ID",
+        ("MTProto", "api_hash"): "MTPROTO_API_HASH",
+        ("MTProto", "session_string"): "MTPROTO_SESSION_STRING",
+        ("Upload", "use_userbot"): "UPLOAD_USE_USERBOT",
+        ("Upload", "dump_channel"): "UPLOAD_DUMP_CHANNEL",
+        ("Upload", "max_retries"): "UPLOAD_MAX_RETRIES",
+        ("Upload", "max_concurrent_uploads"): "UPLOAD_MAX_CONCURRENT_UPLOADS",
+        ("Upload", "telegram_file_limit_bytes"): "UPLOAD_TELEGRAM_FILE_LIMIT_BYTES",
+        ("Storage", "use_gcs"): "STORAGE_USE_GCS",
+        ("Storage", "gcp_project"): "STORAGE_GCP_PROJECT",
+        ("Storage", "gcs_bucket"): "STORAGE_GCS_BUCKET",
+        ("Storage", "gcp_service_account_json"): "STORAGE_GCP_SERVICE_ACCOUNT_JSON",
+        ("Storage", "max_local_usage_gb"): "STORAGE_MAX_LOCAL_USAGE_GB",
+        ("Storage", "download_dir"): "STORAGE_DOWNLOAD_DIR"
     }
 
     for (section, key), env_var in env_mapping.items():

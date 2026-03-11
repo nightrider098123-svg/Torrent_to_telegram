@@ -11,6 +11,8 @@ from googleapiclient.http import MediaFileUpload
 
 from queue_manager import Task
 from utils import split_file_for_telegram
+from userbot_uploader import UserbotUploader
+from gcs_uploader import GCSUploader
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
@@ -120,26 +122,52 @@ class DriveUploader:
             progress_callback(task)
             return False
 
-async def telegram_chunked_upload(file_path: str, context, chat_id: int, reply_to_message_id: Optional[int], max_chunk_size: int = 1900 * 1024 * 1024) -> None:
+async def telegram_chunked_upload(file_path: str, context, chat_id: int, reply_to_message_id: Optional[int], max_chunk_size: int = 1900 * 1024 * 1024, userbot_uploader: Optional[UserbotUploader] = None) -> bool:
     """
-    Splits a file and uploads it to Telegram chunk by chunk using sendDocument.
-    Provides instructions for reassembly to the user.
+    Splits a file and uploads it to Telegram chunk by chunk using sendDocument,
+    or directly via MTProto if userbot_uploader is provided and file is within its limits.
+    Returns True if upload is fully successful, False otherwise.
     """
     try:
+        file_size = os.path.getsize(file_path)
+
+        # If userbot is available and size is within MTProto limit (or we prefer to let userbot handle chunking if we implement it there)
+        if userbot_uploader:
+            actual_limit = userbot_uploader.telegram_file_limit_bytes
+            if file_size <= actual_limit:
+                logging.info(f"Using MTProto userbot to upload: {file_path}")
+                return await userbot_uploader.upload_file(file_path)
+            else:
+                logging.info(f"File {file_path} exceeds userbot limit ({actual_limit}). Splitting.")
+                max_chunk_size = actual_limit
+
         chunks = split_file_for_telegram(file_path, max_chunk_size)
         if len(chunks) > 1:
             msg = f"File is larger than Telegram limits. Split into {len(chunks)} chunks.\n"
             msg += "To combine them, run: `cat filename.ext.* > filename.ext`"
-            await context.bot.send_message(chat_id=chat_id, reply_to_message_id=reply_to_message_id, text=msg, parse_mode='Markdown')
+            if reply_to_message_id:
+                await context.bot.send_message(chat_id=chat_id, reply_to_message_id=reply_to_message_id, text=msg, parse_mode='Markdown')
+            else:
+                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='Markdown')
 
         for i, chunk in enumerate(chunks):
-            with open(chunk, 'rb') as chunk_file:
-                await context.bot.send_document(
-                    chat_id=chat_id,
-                    reply_to_message_id=reply_to_message_id,
-                    document=chunk_file,
-                    caption=f"Part {i+1} of {len(chunks)}"
-                )
+            if userbot_uploader:
+                logging.info(f"Uploading chunk {i+1}/{len(chunks)} via MTProto")
+                success = await userbot_uploader.upload_file(chunk)
+                if not success:
+                    raise Exception(f"MTProto upload failed for chunk {i+1}")
+            else:
+                with open(chunk, 'rb') as chunk_file:
+                    kwargs = {
+                        "chat_id": chat_id,
+                        "document": chunk_file,
+                        "caption": f"Part {i+1} of {len(chunks)}"
+                    }
+                    if reply_to_message_id:
+                        kwargs["reply_to_message_id"] = reply_to_message_id
+
+                    await context.bot.send_document(**kwargs)
+
             # Small delay to prevent rate limiting
             await asyncio.sleep(1)
 
@@ -147,6 +175,13 @@ async def telegram_chunked_upload(file_path: str, context, chat_id: int, reply_t
             if chunk != file_path:
                 os.remove(chunk)
 
+        return True
+
     except Exception as e:
         logging.error(f"Telegram upload failed: {e}")
-        await context.bot.send_message(chat_id=chat_id, reply_to_message_id=reply_to_message_id, text=f"Telegram upload failed: {e}")
+        error_msg = f"Telegram upload failed: {e}"
+        if reply_to_message_id:
+            await context.bot.send_message(chat_id=chat_id, reply_to_message_id=reply_to_message_id, text=error_msg)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=error_msg)
+        return False

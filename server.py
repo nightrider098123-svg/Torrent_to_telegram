@@ -11,8 +11,11 @@ from telegram.ext import ApplicationBuilder
 
 from bot import start_bot, queue_mgr, downloader, config, is_admin
 from queue_manager import Task
-from utils import setup_logging
-from uploader import DriveUploader
+from utils import setup_logging, format_size
+from uploader import DriveUploader, telegram_chunked_upload
+from userbot_uploader import UserbotUploader
+from gcs_uploader import GCSUploader
+from storage_manager import StorageManager
 
 setup_logging()
 
@@ -130,66 +133,187 @@ def worker_loop(application_bot=None, loop=None):
                 # or download_dir if it's a torrent. For torrents, we use the isolated task directory.
                 file_to_upload = task.source if task.type == "local_upload" else task_download_dir
 
-                # Drive upload logic
-                # For `target_folder_id`, re-read config dynamically so /setfolder takes effect immediately
+                # 1. Gather all files to upload
+                files_to_upload = []
+                if os.path.isfile(file_to_upload):
+                    files_to_upload.append(file_to_upload)
+                elif os.path.isdir(file_to_upload):
+                    for root, _, files in os.walk(file_to_upload):
+                        for file in files:
+                            files_to_upload.append(os.path.join(root, file))
+
+                # Reload config dynamically
                 from utils import load_config
                 current_config = load_config()
-                target_folder_id = current_config.get("Drive", "target_folder_id", fallback="")
 
-                uploaded_to_drive = False
-                if target_folder_id:
-                    if os.path.isfile(file_to_upload):
-                        drive_id = drive_uploader.upload_file(file_to_upload, target_folder_id, task, progress_callback)
-                        if drive_id:
-                            logging.info(f"Uploaded file to Drive with ID: {drive_id}")
-                            uploaded_to_drive = True
-                    elif os.path.isdir(file_to_upload):
-                        success = drive_uploader.upload_directory(file_to_upload, target_folder_id, task, progress_callback)
-                        if success:
-                            logging.info(f"Uploaded directory {file_to_upload} to Drive")
-                            uploaded_to_drive = True
+                # Check new configuration sections
+                use_userbot = current_config.getboolean("Upload", "use_userbot", fallback=False)
+                dump_channel_str = current_config.get("Upload", "dump_channel", fallback="")
+                dump_channel = int(dump_channel_str) if dump_channel_str else None
+                owner_id_str = current_config.get("Telegram", "owner_id", fallback="")
+                owner_id = int(owner_id_str) if owner_id_str else None
 
-                # Telegram upload fallback
-                if not uploaded_to_drive and application_bot and loop and task.user_id:
-                    from uploader import telegram_chunked_upload
+                use_gcs = current_config.getboolean("Storage", "use_gcs", fallback=False)
 
-                    logging.info(f"Uploading task {task.task_id} to Telegram as fallback/primary")
-                    class MockContext:
-                        def __init__(self, bot):
-                            self.bot = bot
+                # Send initial metadata message to dump channel and owner
+                metadata_msg = (
+                    f"📦 **New Download Completed**\n"
+                    f"**Task ID:** `{task.task_id}`\n"
+                    f"**Source:** `{task.source}`\n"
+                    f"**Total Size:** {format_size(task.total_bytes)}\n"
+                    f"**Files:** {len(files_to_upload)}\n"
+                )
 
-                    context = MockContext(application_bot)
+                dump_metadata_message_id = None
+                if application_bot and loop:
+                    if dump_channel:
+                        try:
+                            future = asyncio.run_coroutine_threadsafe(
+                                application_bot.send_message(chat_id=dump_channel, text=metadata_msg, parse_mode="Markdown"),
+                                loop
+                            )
+                            msg_obj = future.result()
+                            dump_metadata_message_id = msg_obj.message_id
+                        except Exception as e:
+                            logging.error(f"Failed to send metadata message to dump channel: {e}")
 
-                    if os.path.isfile(file_to_upload):
-                        asyncio.run_coroutine_threadsafe(
-                            telegram_chunked_upload(file_to_upload, context, task.user_id, task.message_id),
-                            loop
-                        ).result() # Wait for completion since we are in a worker thread
-                    elif os.path.isdir(file_to_upload):
-                        for root, _, files in os.walk(file_to_upload):
-                            for file in files:
-                                f_path = os.path.join(root, file)
-                                asyncio.run_coroutine_threadsafe(
-                                    telegram_chunked_upload(f_path, context, task.user_id, task.message_id),
-                                    loop
-                                ).result()
+                    if owner_id:
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                application_bot.send_message(chat_id=owner_id, text=metadata_msg, parse_mode="Markdown"),
+                                loop
+                            )
+                        except Exception as e:
+                            logging.error(f"Failed to send metadata message to owner: {e}")
 
-                # Cleanup task directory after successful upload
-                import shutil
-                if task.type != "local_upload" and os.path.exists(task_download_dir):
+                # Initialize uploaders if needed
+                userbot_uploader = None
+                if use_userbot and dump_channel:
+                    session_string = current_config.get("MTProto", "session_string", fallback="")
+                    api_id = current_config.getint("MTProto", "api_id", fallback=0)
+                    api_hash = current_config.get("MTProto", "api_hash", fallback="")
+                    max_retries = current_config.getint("Upload", "max_retries", fallback=5)
+                    telegram_file_limit_bytes = current_config.getint("Upload", "telegram_file_limit_bytes", fallback=2147483648)
+
+                    if session_string and api_id and api_hash:
+                        userbot_uploader = UserbotUploader(
+                            session_string=session_string,
+                            api_id=api_id,
+                            api_hash=api_hash,
+                            dump_channel=dump_channel,
+                            max_retries=max_retries,
+                            telegram_file_limit_bytes=telegram_file_limit_bytes
+                        )
+
+                gcs_uploader = None
+                if use_gcs:
+                    gcp_project = current_config.get("Storage", "gcp_project", fallback="")
+                    gcs_bucket = current_config.get("Storage", "gcs_bucket", fallback="")
+                    service_account_json = current_config.get("Storage", "gcp_service_account_json", fallback="service-account.json")
+                    if gcp_project and gcs_bucket and service_account_json:
+                        gcs_uploader = GCSUploader(gcp_project, gcs_bucket, service_account_json)
+
+                # Get a mock context for telegram_chunked_upload fallback
+                class MockContext:
+                    def __init__(self, bot):
+                        self.bot = bot
+                context = MockContext(application_bot) if application_bot else None
+
+                # Storage Manager to mark files
+                download_dir = current_config.get("Storage", "download_dir", fallback="./downloads")
+                max_local_usage_gb = current_config.getfloat("Storage", "max_local_usage_gb", fallback=70.0)
+                storage_manager = StorageManager(download_dir=download_dir, max_local_usage_gb=max_local_usage_gb)
+
+                final_status = {}
+                gcs_urls = {}
+
+                for f_path in files_to_upload:
+                    file_name = os.path.basename(f_path)
+                    file_success = True
+
+                    # 2. Upload to GCS first if enabled
+                    if gcs_uploader:
+                        dest_blob = f"{task.task_id}/{file_name}"
+                        gcs_url = gcs_uploader.upload_file(f_path, dest_blob)
+                        if gcs_url:
+                            gcs_urls[file_name] = gcs_url
+                        else:
+                            logging.error(f"GCS upload failed for {f_path}")
+                            file_success = False
+
+                    # 3. Upload to Dump Channel
+                    if dump_channel and application_bot and loop:
+                        try:
+                            # If we have userbot, telegram_chunked_upload will use it when possible
+                            success = asyncio.run_coroutine_threadsafe(
+                                telegram_chunked_upload(
+                                    f_path,
+                                    context,
+                                    chat_id=dump_channel,
+                                    reply_to_message_id=None,
+                                    userbot_uploader=userbot_uploader
+                                ),
+                                loop
+                            ).result()
+
+                            if not success:
+                                file_success = False
+
+                            if success and owner_id:
+                                try:
+                                    msg = f"✅ Uploaded `{file_name}` ({format_size(os.path.getsize(f_path))})"
+                                    asyncio.run_coroutine_threadsafe(
+                                        application_bot.send_message(chat_id=owner_id, text=msg, parse_mode="Markdown"),
+                                        loop
+                                    )
+                                except Exception:
+                                    pass
+
+                        except Exception as e:
+                            logging.error(f"Telegram upload failed for {f_path}: {e}")
+                            file_success = False
+
+                    final_status[file_name] = file_success
+
+                    # Mark as successfully uploaded for StorageManager to potentially clean up
+                    if file_success:
+                        storage_manager.mark_uploaded(f_path)
+
+                # Stop userbot if it was started
+                if userbot_uploader:
                     try:
-                        shutil.rmtree(task_download_dir)
-                        logging.info(f"Cleaned up isolated download directory: {task_download_dir}")
-                    except Exception as clean_e:
-                        logging.warning(f"Failed to clean up {task_download_dir}: {clean_e}")
+                        asyncio.run_coroutine_threadsafe(userbot_uploader.stop(), loop).result()
+                    except Exception as e:
+                        logging.error(f"Failed to stop UserbotUploader: {e}")
+
+                # Send Final Summary
+                if application_bot and loop:
+                    summary_msg = f"🏁 **Task Complete Summary**\n**Task ID:** `{task.task_id}`\n\n"
+                    for fname, success in final_status.items():
+                        status_icon = "✅" if success else "❌"
+                        summary_msg += f"{status_icon} `{fname}`\n"
+                        if fname in gcs_urls:
+                            summary_msg += f"   └ GCS: `{gcs_urls[fname]}`\n"
+
+                    if dump_channel:
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                application_bot.send_message(chat_id=dump_channel, text=summary_msg, reply_to_message_id=dump_metadata_message_id, parse_mode="Markdown"),
+                                loop
+                            )
+                        except Exception as e:
+                            logging.error(f"Failed to send summary to dump channel: {e}")
+
+                    if owner_id:
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                application_bot.send_message(chat_id=owner_id, text=summary_msg, parse_mode="Markdown"),
+                                loop
+                            )
+                        except Exception as e:
+                            logging.error(f"Failed to send summary to owner: {e}")
 
                 queue_mgr.update_task_status(task.task_id, "finished")
-                if application_bot and loop and task.user_id:
-                    msg = f"✅ Task `{task.task_id}` has finished uploading."
-                    asyncio.run_coroutine_threadsafe(
-                        application_bot.send_message(chat_id=task.user_id, text=msg, parse_mode="Markdown"),
-                        loop
-                    )
 
         except Exception as e:
             logging.error(f"Worker loop error on task {task.task_id}: {e}")
@@ -224,6 +348,17 @@ async def main():
     # Start worker thread (pass application bot and the event loop for safe notifications)
     worker_thread = threading.Thread(target=worker_loop, args=(application.bot, loop), daemon=True)
     worker_thread.start()
+
+    # Start storage manager background thread
+    from storage_manager import StorageManager
+    download_dir = config.get("Storage", "download_dir", fallback="./downloads")
+    max_local_usage_gb = config.getfloat("Storage", "max_local_usage_gb", fallback=70.0)
+    owner_id_str = config.get("Telegram", "owner_id", fallback="")
+    owner_id = int(owner_id_str) if owner_id_str else None
+
+    storage_manager = StorageManager(download_dir=download_dir, max_local_usage_gb=max_local_usage_gb)
+    storage_thread = threading.Thread(target=storage_manager.run_worker, args=(application, owner_id), daemon=True)
+    storage_thread.start()
 
     # Run FastAPI server
     server_config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
