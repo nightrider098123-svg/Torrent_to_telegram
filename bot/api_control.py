@@ -187,7 +187,10 @@ class BotApp:
         self._setup_handlers()
 
         msg = "Bot started successfully. Waiting for commands."
-        await self.client.send_message(self.config.ADMIN_CHANNEL_ID, msg)
+        try:
+            await self.client.send_message(self.config.ADMIN_CHANNEL_ID, msg)
+        except ValueError:
+            logger.warning("Skipped startup message: Peer id invalid. Waiting for an incoming message to rebuild cache.")
 
         await idle()
         await self.stop()
