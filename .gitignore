@@ -1,0 +1,10 @@
+config.cfg
+*.session
+service-account.json
+credentials.json
+token.json
+bot.log
+queue_state.json
+downloads/
+__pycache__/
+*.pyc

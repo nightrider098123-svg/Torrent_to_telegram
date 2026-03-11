@@ -19,3 +19,43 @@ target_folder_id = YOUR_DRIVE_FOLDER_ID
 credentials_file = credentials.json
 # Path to save/load OAuth2 token state
 token_file = token.json
+
+[Telegram]
+# Your bot token from @BotFather (fallback/small files)
+bot_token = YOUR_BOT_TOKEN_HERE
+# Numeric Telegram user id for owner messages
+owner_id = YOUR_OWNER_ID_HERE
+
+[MTProto]
+# Numeric value from Telegram developer portal
+api_id = YOUR_API_ID
+# Secret string from Telegram developer portal
+api_hash = YOUR_API_HASH
+# Exported session string created locally (secret) for the upload account
+session_string = YOUR_SESSION_STRING
+
+[Upload]
+# if true, prefer MTProto path for uploads.
+use_userbot = true
+# numeric channel id (for example -1001234567890) where files will be uploaded.
+dump_channel = YOUR_DUMP_CHANNEL_ID
+# integer for how many times an upload is retried.
+max_retries = 5
+# integer to cap parallel uploads.
+max_concurrent_uploads = 2
+# recommended default 2147483648 (2GB); used to decide whether to split a file.
+telegram_file_limit_bytes = 2147483648
+
+[Storage]
+# if true, a copy of files will be uploaded to GCS.
+use_gcs = false
+# GCP project id (if GCS enabled).
+gcp_project = YOUR_GCP_PROJECT
+# bucket name for persistent storage (if GCS enabled).
+gcs_bucket = YOUR_GCS_BUCKET
+# path on host to service account JSON (never committed).
+gcp_service_account_json = service-account.json
+# when local downloads exceed this, delete oldest uploaded files.
+max_local_usage_gb = 70.0
+# path where torrent client writes completed files
+download_dir = ./downloads

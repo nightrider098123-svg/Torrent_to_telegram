@@ -16,7 +16,9 @@ This bot refuses to proceed for non-admin users by default to prevent abuse. **D
 - **Primary Downloader:** `libtorrent` (Python bindings) for speed and DHT support.
 - **Fallback Downloader:** `aria2c` fallback using JSON-RPC.
 - **Queue Management:** Priority queue backed by a JSON file (`queue_state.json`) that saves progress and state to survive restarts.
-- **Uploader:** Resumable Google Drive uploading and chunked Telegram file splitting.
+- **Uploader:** Resumable Google Drive uploading, MTProto Userbot uploading to Dump Channel, and chunked Telegram file splitting.
+- **Storage Management:** Automatic disk usage monitoring and local file cleanup.
+- **GCS Persistence:** Resumable Google Cloud Storage (GCS) uploading.
 - **Security Default:** Strict Admin ID whitelist out of the box. Only authorized Telegram IDs can issue commands.
 - **Structured Logging:** JSON-lines logging to `bot.log` for easy monitoring.
 - **Health Server:** Exposes an HTTP `/health` endpoint (FastAPI) useful for monitoring systems.
@@ -26,6 +28,9 @@ This bot refuses to proceed for non-admin users by default to prevent abuse. **D
 2. **Rotating Bot Token:** If your token leaks, message `@BotFather` on Telegram, send `/revoke`, and select your bot to get a new token. Use `utils.rotate_token` or edit `config.cfg`.
 3. **Revoking Google OAuth:** If `credentials.json` or `token.json` is compromised, go to Google Cloud Console > APIs & Services > Credentials and delete the OAuth client, then delete `token.json` from your server.
 4. **Shared Drives:** Be careful storing tokens (`token.json`, `config.cfg`) on shared Google Drives, as anyone with read access can steal your bot/Drive identity.
+5. **MTProto Session Strings:** Generating the session string requires a phone login and is a one-time manual step by a human on their own machine. Keep it secret. Use a dedicated Telegram account for uploads when possible. The account will act like a real user and is subject to Telegram rules. Never commit secrets like `config.cfg` (with `session_string`), `service-account.json`, and any `.session` files. Add them to `.gitignore`.
+6. **GCP Billing:** Enabling GCS may incur costs. Add guidance to create a bucket, set retention rules, and monitor billing alerts.
+7. **Rate Limits:** MTProto uploads may trigger FloodWaits; the uploader implements exponential backoff and respects server wait messages.
 
 ---
 
