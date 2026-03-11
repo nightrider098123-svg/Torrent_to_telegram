@@ -1,121 +1,88 @@
-# Telegram Torrent Downloader Bot
+# Telegram Torrent Downloader Bot (Colab/MTProto Uploader)
 
-A secure, modular, production-ready Python Telegram bot that accepts magnet links and `.torrent` files and downloads them to a hosted environment or Linux server, supporting resumable Google Drive uploads and chunked Telegram uploads.
-
-Written in modern Python 3.10+ using `python-telegram-bot` (v20.x).
-
-## ⚠️ Important Legal Policy
-This project must be used for **legal purposes only**, such as downloading open-source Linux distributions, public domain content, or media you legally own.
-You are solely responsible for ensuring you comply with the law, as well as the Terms of Service of your cloud provider (e.g., Google Colab, Google Drive, Telegram).
-**Do not use this bot to pirate copyrighted material.**
-This bot refuses to proceed for non-admin users by default to prevent abuse. **Do not disable admin checks if running on a public server.**
-
----
+This project allows you to download torrents directly inside a Google Colab VM disk and instantly stream-upload them to a Telegram Dump Channel using an MTProto User Session. It bypasses the need for external cloud storage and implements robust disk safety checks.
 
 ## Features
-- **Primary Downloader:** `libtorrent` (Python bindings) for speed and DHT support.
-- **Fallback Downloader:** `aria2c` fallback using JSON-RPC.
-- **Queue Management:** Priority queue backed by a JSON file (`queue_state.json`) that saves progress and state to survive restarts.
-- **Uploader:** Resumable Google Drive uploading, MTProto Userbot uploading to Dump Channel, and chunked Telegram file splitting.
-- **Storage Management:** Automatic disk usage monitoring and local file cleanup.
-- **GCS Persistence:** Resumable Google Cloud Storage (GCS) uploading.
-- **Security Default:** Strict Admin ID whitelist out of the box. Only authorized Telegram IDs can issue commands.
-- **Structured Logging:** JSON-lines logging to `bot.log` for easy monitoring.
-- **Health Server:** Exposes an HTTP `/health` endpoint (FastAPI) useful for monitoring systems.
+* **Zero External Cloud Storage:** Downloads live purely on the ephemeral Colab VM disk (`/content/downloads`).
+* **Instant MTProto Uploads:** Uses Pyrogram + MTProto session to upload massive files (up to 4 GiB limits or split natively) immediately upon completion.
+* **Disk Safety Monitor:** Stops downloads if disk space gets low (configurable, e.g., 70 GB), flushes the upload queue, and resumes downloads when space frees up.
+* **Smart File Splitting:** Automatically splits huge files (>3.9 GiB) via streaming logic to save disk space while uploading.
+* **Resume Capability:** Saves queued download and upload states to a pinned JSON manifest message in a private Admin Telegram channel, recovering seamlessly across Colab VM restarts.
 
-## Security & Admin Checklist
-1. **Admin Whitelist:** Always set `admin_ids` in `config.cfg`. Without this, no commands will work. To relax this (not recommended), you must empty the `admin_ids` list.
-2. **Rotating Bot Token:** If your token leaks, message `@BotFather` on Telegram, send `/revoke`, and select your bot to get a new token. Use `utils.rotate_token` or edit `config.cfg`.
-3. **Revoking Google OAuth:** If `credentials.json` or `token.json` is compromised, go to Google Cloud Console > APIs & Services > Credentials and delete the OAuth client, then delete `token.json` from your server.
-4. **Shared Drives:** Be careful storing tokens (`token.json`, `config.cfg`) on shared Google Drives, as anyone with read access can steal your bot/Drive identity.
-5. **MTProto Session Strings:** Generating the session string requires a phone login and is a one-time manual step by a human on their own machine. Keep it secret. Use a dedicated Telegram account for uploads when possible. The account will act like a real user and is subject to Telegram rules. Never commit secrets like `config.cfg` (with `session_string`), `service-account.json`, and any `.session` files. Add them to `.gitignore`.
-6. **GCP Billing:** Enabling GCS may incur costs. Add guidance to create a bucket, set retention rules, and monitor billing alerts.
-7. **Rate Limits:** MTProto uploads may trigger FloodWaits; the uploader implements exponential backoff and respects server wait messages.
+## Hard Requirements
+- **DO NOT** use Google Drive.
+- **DO NOT** use Google Cloud Storage.
 
----
+## Colab Setup Steps
 
-## 🚀 Setup A: Self-hosted Linux Server (systemd)
+### 1. Get Telegram API Credentials
+1. Go to [https://my.telegram.org/apps](https://my.telegram.org/apps) and log in.
+2. Create an application to get your `API_ID` (integer) and `API_HASH` (string).
 
-### 1. Install Dependencies
-Ensure you have Python 3.10+, `pip`, and `aria2c` installed.
-```bash
-sudo apt update
-sudo apt install python3 python3-pip aria2 python3-libtorrent
-```
+### 2. Generate a User Session String
+You need a string session so the bot can upload large files natively as a user:
+1. Open a terminal or a local Python environment.
+2. Install `pyrogram` and `TgCrypto`:
+   ```bash
+   pip install pyrogram TgCrypto
+   ```
+3. Run the following script to log in and get your string:
+   ```python
+   from pyrogram import Client
+   api_id = 1234567 # YOUR API ID
+   api_hash = "your_api_hash"
+   with Client("my_account", api_id, api_hash) as app:
+       print(app.export_session_string())
+   ```
+4. Save the long string generated; you will need it for the Colab environment variables.
+*(Security Warning: This string acts as your password. Do not commit or share it!)*
 
-### 2. Configure the Bot
-Clone the repo and install Python requirements:
-```bash
-pip install -r requirements.txt
-cp config.cfg.example config.cfg
-```
-Edit `config.cfg` and fill in:
-- `admin_ids`: Your Telegram user ID (Get it from `@userinfobot`).
-- `token`: Your Bot Token from `@BotFather`.
-- Drive folder ID and credentials path.
+### 3. Create Telegram Channels
+1. **Dump Channel:** Create a new channel where files will be dumped. Add the account you used to generate the session string as an Administrator. Get the Chat ID (e.g. `-1001234567890`).
+2. **Admin Channel:** Create a private group or channel for bot state and logs. Get the Chat ID (e.g. `-1009876543210`). Add the session account as an Admin.
 
-### 3. Run as a Systemd Service
-Create a new service file: `sudo nano /etc/systemd/system/telegram-torrent-bot.service`
-```ini
-[Unit]
-Description=Telegram Torrent Bot Server
-After=network.target
+### 4. Run the Colab Notebook
+Upload the `notebook.ipynb` file from this repository to your Google Colab account.
+Execute the cells one by one. The notebook will guide you to set environment variables.
 
-[Service]
-User=your_linux_user
-WorkingDirectory=/path/to/project
-ExecStart=/usr/bin/python3 server.py
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable telegram-torrent-bot
-sudo systemctl start telegram-torrent-bot
-```
-
----
-
-## 🚀 Setup B: Google Colab Environment
-
-You can run this directly in a Google Colab notebook. Note that Colab runtimes shut down when you close the browser or after a certain timeout. Ensure your Colab instance is kept open, or configure your queue manager to save state aggressively to Drive so a restarted runtime can pick up where it left off.
-
-### Colab Snippet
-Open a new notebook and paste this into a cell:
-
+#### Example Environment Variables (Set in Notebook)
 ```python
-# 1. Mount Google Drive
-from google.colab import drive
-drive.mount('/content/drive')
-
-# 2. Install dependencies (libtorrent and aria2)
-!apt-get install python3-libtorrent aria2
-!pip install -r /content/drive/MyDrive/bot_folder/requirements.txt
-
-# 3. Change directory to your bot folder and run
 import os
-os.chdir('/content/drive/MyDrive/bot_folder')
 
-# Ensure your config.cfg is populated in your Drive folder!
-!python server.py
+# DO NOT SHARE THIS CELL!
+os.environ["API_ID"] = "1234567"
+os.environ["API_HASH"] = "abcdef1234567890"
+os.environ["USER_SESSION_STRING"] = "1BJWap_MBz..._your_long_string_here"
+
+os.environ["DUMP_CHANNEL_ID"] = "-1001234567890"
+os.environ["ADMIN_CHANNEL_ID"] = "-1009876543210"
+
+# Optional settings
+os.environ["DOWNLOAD_DIR"] = "/content/downloads"
+os.environ["MAX_DISK_USED_GB"] = "70.0"
+os.environ["RESUME_DISK_USED_GB"] = "40.0"
+os.environ["UPLOAD_WORKERS"] = "3"
 ```
 
----
+## Admin Commands
+Send these messages to the **Admin Channel** to control the bot:
+- `ADD <magnet_link>`: Queues a new torrent download.
+- `STATUS`: Replies with a summary of disk usage, queue size, and active downloads.
+- `PAUSE`: Immediately stops all active aria2 downloads.
+- `RESUME`: Resumes all paused aria2 downloads.
+- `SET MAX_GB <float>`: Dynamically adjusts the disk safety threshold (e.g., `SET MAX_GB 60`).
+- `SHUTDOWN`: Gracefully shuts down the bot.
 
-## Logs Example
-Structured JSON logs are saved to `bot.log`. Example:
-```json
-{"time": "2023-10-25 10:00:00,000", "level": "INFO", "name": "root", "message": "Added task e4f1a2 to queue."}
-{"time": "2023-10-25 10:00:05,000", "level": "INFO", "name": "root", "message": "Started libtorrent download for task e4f1a2"}
-```
+## Troubleshooting
+**1. Session Expired or StringSession Invalid**
+If the bot crashes stating `AuthKeyUnregistered` or `SessionExpired`, you must log in again. Re-run the local Pyrogram script to generate a new `USER_SESSION_STRING` and update your Colab env var.
 
-## Testing
-To run the included test suite:
-```bash
-pip install pytest
-pytest tests/
-```
+**2. FloodWait or Throttled Uploads**
+If logs show continuous `FloodWait` warnings, it means Telegram is throttling your uploads. The bot automatically implements exponential backoff to respect this. Wait for it to clear. Consider lowering `UPLOAD_WORKERS` to `1` or `2` in your config to prevent triggering limits.
+
+**3. Colab Disk Cleared Unexpectedly**
+Colab VMs are ephemeral. If your notebook disconnects and clears disk:
+1. Re-run the notebook cells.
+2. The bot will automatically read the last `STATE_MANIFEST:` message in your Admin Channel.
+3. It will re-queue any uncompleted `magnet_links` automatically.
+4. If a file was only partially uploaded, it will restart the download and subsequent upload.
